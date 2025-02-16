@@ -169,3 +169,6 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Ignore data folder inside week3
+week3/data/
