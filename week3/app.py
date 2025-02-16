@@ -1,10 +1,11 @@
 import streamlit as st
 import tempfile
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_docling import DoclingLoader
+from langchain_docling.loader import ExportType
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import Ollama
+from langchain_ollama.llms import OllamaLLM
 from langchain.chains import RetrievalQA
 import os
 import time
@@ -40,29 +41,20 @@ def process_pdf(uploaded_file, status_container):
         with open(temp_file_path, 'wb') as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
         
-        # Load PDF
+        # Load PDF using Docling
         status_text.write("📖 Loading PDF content...")
         progress_bar.progress(20)
         update_timing()
-        loader = PyPDFLoader(temp_file_path)
+        loader = DoclingLoader(
+            file_path=temp_file_path,
+            export_type=ExportType.DOC_CHUNKS
+        )
         documents = loader.load()
         
         # Show document statistics
         status_container.write(f"📊 Document Statistics:")
-        status_container.write(f"- Number of pages: {len(documents)}")
+        status_container.write(f"- Number of chunks: {len(documents)}")
         progress_bar.progress(30)
-        update_timing()
-        
-        # Split text into chunks
-        status_text.write("✂️ Splitting document into chunks...")
-        progress_bar.progress(40)
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
-        )
-        splits = text_splitter.split_documents(documents)
-        status_container.write(f"- Number of chunks: {len(splits)}")
-        progress_bar.progress(50)
         update_timing()
         
         # Create embeddings
@@ -76,7 +68,7 @@ def process_pdf(uploaded_file, status_container):
         # Create vector store with progress tracking
         status_text.write("🗄️ Creating vector store...")
         progress_text = status_container.empty()
-        total_chunks = len(splits)
+        total_chunks = len(documents)
         
         # Custom embedding function to track progress
         def embed_with_progress(texts):
@@ -87,21 +79,21 @@ def process_pdf(uploaded_file, status_container):
             return embeddings.embed_documents(texts)
         
         # Create FAISS index with progress tracking
-        texts = [doc.page_content for doc in splits]
+        texts = [doc.page_content for doc in documents]
         embeddings_list = embed_with_progress(texts)
         vectorstore = FAISS.from_embeddings(
             text_embeddings=list(zip(texts, embeddings_list)),
             embedding=embeddings,
         )
         
-        status_container.write(f"- Vectors created: {len(splits)}")
+        status_container.write(f"- Vectors created: {len(documents)}")
         progress_bar.progress(80)
         update_timing()
         
         # Initialize LLM
         status_text.write("🤖 Initializing LLM (llama3.1)...")
         progress_bar.progress(90)
-        llm = Ollama(model="llama3.1:8b")
+        llm = OllamaLLM(model="llama3.1:8b")
         update_timing()
         
         # Create QA chain
@@ -158,7 +150,7 @@ if uploaded_file is not None:
     if question:
         with st.spinner("🤔 Thinking..."):
             # Get the answer
-            result = st.session_state.qa_chain({"query": question})
+            result = st.session_state.qa_chain.invoke({"query": question})
             
             # Display the answer
             st.write("### 💡 Answer:")

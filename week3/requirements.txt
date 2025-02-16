@@ -1,7 +1,9 @@
-streamlit==1.31.0
-langchain==0.1.5
-langchain-community==0.0.19
-pypdf==3.17.4
-python-dotenv==1.0.1
-ollama==0.1.6
-faiss-cpu==1.7.4
+streamlit
+langchain
+langchain-community
+pypdf
+python-dotenv
+ollama
+faiss-cpu
+langchain-docling
+langchain-ollama
