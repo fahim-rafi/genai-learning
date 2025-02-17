@@ -2,9 +2,9 @@ import streamlit as st
 import tempfile
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import Ollama
+from langchain_ollama.llms import OllamaLLM
 from langchain.chains import RetrievalQA
 import os
 import time
@@ -83,7 +83,7 @@ def process_pdf(uploaded_file, status_container):
             for i, _ in enumerate(texts, 1):
                 progress = (i / total_chunks) * 100
                 progress_text.write(f"Embedding chunk {i}/{total_chunks} ({progress:.1f}%)")
-                time.sleep(0.1)  # Small delay to prevent UI flicker
+                time.sleep(0.1)  
             return embeddings.embed_documents(texts)
         
         # Create FAISS index with progress tracking
@@ -101,7 +101,7 @@ def process_pdf(uploaded_file, status_container):
         # Initialize LLM
         status_text.write("🤖 Initializing LLM (llama3.1)...")
         progress_bar.progress(90)
-        llm = Ollama(model="llama3.1:8b")
+        llm = OllamaLLM(model="llama3.1:8b")
         update_timing()
         
         # Create QA chain
@@ -158,7 +158,7 @@ if uploaded_file is not None:
     if question:
         with st.spinner("🤔 Thinking..."):
             # Get the answer
-            result = st.session_state.qa_chain({"query": question})
+            result = st.session_state.qa_chain.invoke({"query": question})
             
             # Display the answer
             st.write("### 💡 Answer:")
