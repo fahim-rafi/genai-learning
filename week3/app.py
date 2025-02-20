@@ -1,174 +1,107 @@
-import streamlit as st
-import tempfile
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_ollama import OllamaEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_ollama.llms import OllamaLLM
-from langchain.chains import RetrievalQA
 import os
-import time
+os.environ['HF_HOME'] = 'G:\models\huggingface'
 
-# Set page config
-st.set_page_config(page_title="PDF RAG Chat", layout="wide")
+import streamlit as st
+import torch
 
-# Initialize session state for storing the QA chain and processing status
-if "qa_chain" not in st.session_state:
-    st.session_state.qa_chain = None
-if "processing_status" not in st.session_state:
-    st.session_state.processing_status = None
+torch.classes.__path__ = []
 
-def process_pdf(uploaded_file, status_container):
-    progress_bar = status_container.progress(0)
-    status_text = status_container.empty()
-    timing_text = status_container.empty()
-    start_time = time.time()
-    temp_file_path = None
+import PyPDF2
+from transformers import pipeline
+import subprocess  # Added to enable calling the Ollama CLI
+from tqdm import tqdm  # Add this import at the top
+
+from langchain_huggingface import HuggingFacePipeline
+from langchain.chains import RetrievalQA
+from langchain.text_splitter import CharacterTextSplitter
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+
+
+def load_pdf(file):
+    """Extract text from a PDF file."""
+    pdf_reader = PyPDF2.PdfReader(file)
+    text = ""
+    for page in pdf_reader.pages:
+        text += page.extract_text()
+    return text
+
+
+def generate_answer_ollama(query, context):
+    """Generate answer using Ollama's local model by calling the command line interface.
     
-    def update_timing():
-        elapsed = time.time() - start_time
-        timing_text.write(f"⏱️ Time elapsed: {elapsed:.1f} seconds")
-    
+    The prompt is now passed via standard input rather than as a command-line argument to avoid
+    Windows' maximum command-line length limitations.
+    """
+    prompt = f"Answer the question based on the following context:\n{context}\nQuestion: {query}\nAnswer:"
+    # Remove the --prompt argument, and pass the prompt via stdin.
+    cmd = ["ollama", "run", "llama3.1:8b"]
     try:
-        # Create a temporary file to store the PDF
-        status_text.write("📥 Creating temporary file...")
-        progress_bar.progress(10)
-        update_timing()
-        
-        # Create temporary file with a specific suffix
-        temp_file_path = os.path.join(tempfile.gettempdir(), f"pdf_upload_{time.time()}.pdf")
-        with open(temp_file_path, 'wb') as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-        
-        # Load PDF
-        status_text.write("📖 Loading PDF content...")
-        progress_bar.progress(20)
-        update_timing()
-        loader = PyPDFLoader(temp_file_path)
-        documents = loader.load()
-        
-        # Show document statistics
-        status_container.write(f"📊 Document Statistics:")
-        status_container.write(f"- Number of pages: {len(documents)}")
-        progress_bar.progress(30)
-        update_timing()
-        
-        # Split text into chunks
-        status_text.write("✂️ Splitting document into chunks...")
-        progress_bar.progress(40)
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
-        )
-        splits = text_splitter.split_documents(documents)
-        status_container.write(f"- Number of chunks: {len(splits)}")
-        progress_bar.progress(50)
-        update_timing()
-        
-        # Create embeddings
-        status_text.write("🧮 Initializing embedding model (nomic-embed-text)...")
-        progress_bar.progress(60)
-        embeddings = OllamaEmbeddings(
-            model="nomic-embed-text"
-        )
-        update_timing()
-        
-        # Create vector store with progress tracking
-        status_text.write("🗄️ Creating vector store...")
-        progress_text = status_container.empty()
-        total_chunks = len(splits)
-        
-        # Custom embedding function to track progress
-        def embed_with_progress(texts):
-            for i, _ in enumerate(texts, 1):
-                progress = (i / total_chunks) * 100
-                progress_text.write(f"Embedding chunk {i}/{total_chunks} ({progress:.1f}%)")
-                time.sleep(0.1)  
-            return embeddings.embed_documents(texts)
-        
-        # Create FAISS index with progress tracking
-        texts = [doc.page_content for doc in splits]
-        embeddings_list = embed_with_progress(texts)
-        vectorstore = FAISS.from_embeddings(
-            text_embeddings=list(zip(texts, embeddings_list)),
-            embedding=embeddings,
-        )
-        
-        status_container.write(f"- Vectors created: {len(splits)}")
-        progress_bar.progress(80)
-        update_timing()
-        
-        # Initialize LLM
-        status_text.write("🤖 Initializing LLM (llama3.1)...")
-        progress_bar.progress(90)
-        llm = OllamaLLM(model="llama3.1:8b")
-        update_timing()
-        
-        # Create QA chain
-        status_text.write("⚙️ Creating QA chain...")
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
-            return_source_documents=True,
-        )
-        
-        progress_bar.progress(100)
-        final_time = time.time() - start_time
-        status_text.write(f"✅ Processing complete! Total time: {final_time:.1f} seconds")
-        
-        return qa_chain
-            
-    except Exception as e:
-        status_text.error(f"❌ Error during processing: {str(e)}")
-        progress_bar.progress(0)
-        raise e
-    
-    finally:
-        # Clean up temporary file in the finally block
-        status_text.write("🧹 Cleaning up temporary files...")
-        if temp_file_path and os.path.exists(temp_file_path):
-            try:
-                os.unlink(temp_file_path)
-            except Exception as e:
-                status_text.warning(f"⚠️ Note: Could not delete temporary file: {str(e)}")
+        # The prompt text is now supplied as standard input.
+        result = subprocess.run(cmd, input=prompt, capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        return f"Error generating answer with Ollama: {e}"
 
-# Streamlit UI
-st.title("📚 PDF Question Answering with RAG")
 
-# Add sidebar for processing status
-st.sidebar.title("Processing Status")
-status_container = st.sidebar
+def main():
+    st.title("RAG PDF Info Extraction App")
+    st.write("Upload a PDF document (e.g., the document from [Municode](https://library.municode.com/tn/metro_government_of_nashville_and_davidson_county/codes/code_of_ordinances?nodeId=CD_TIT17ZO_CH17.08ZODILAUS_17.08.010ZODIES)) and ask questions about it.")
 
-# File upload
-uploaded_file = st.file_uploader("Upload your PDF", type="pdf")
+    uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+    query = st.text_input("Enter your question:")
+    generation_choice = st.radio("Choose generation model:", ("HuggingFace", "Ollama"))
 
-if uploaded_file is not None:
-    if st.session_state.qa_chain is None:
-        try:
-            st.session_state.qa_chain = process_pdf(uploaded_file, status_container)
-            st.success("✨ PDF processed successfully! You can now ask questions about it.")
-        except Exception as e:
-            st.error("Failed to process PDF. Please try again.")
-            st.session_state.qa_chain = None
+    if uploaded_file is not None:
+        with st.spinner('Extracting text from PDF...'):
+            pdf_text = load_pdf(uploaded_file)
+        st.subheader("PDF Text Preview")
+        st.write(pdf_text[:500] + "...")
 
-    # Question input
-    question = st.text_input("Ask a question about your PDF:")
-    
-    if question:
-        with st.spinner("🤔 Thinking..."):
-            # Get the answer
-            result = st.session_state.qa_chain.invoke({"query": question})
-            
-            # Display the answer
-            st.write("### 💡 Answer:")
-            st.write(result["result"])
-            
-            # Display source documents
-            st.write("### 📑 Sources:")
-            for i, doc in enumerate(result["source_documents"]):
-                with st.expander(f"Source {i + 1}"):
-                    st.write(doc.page_content)
+        # Use LangChain for splitting the text and building a vector index
 
-else:
-    st.info("📤 Please upload a PDF file to get started!") 
+        text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        docs = text_splitter.split_text(pdf_text)
+        st.write(f"Document split into {len(docs)} chunks.")
+
+        st.info("Loading embedding model with LangChain...")
+        embedding = HuggingFaceEmbeddings(model_name="all-mpnet-base-v2")
+        
+        st.info("Building vector index with LangChain...")
+        db = None
+        progress_bar = st.progress(0)
+        for i, doc in enumerate(docs):
+            if db:
+                db.add_texts([doc])
+            else:
+                db = FAISS.from_texts([doc], embedding)
+            # Update progress bar
+            progress = (i + 1) / len(docs)
+            progress_bar.progress(progress)
+        docsearch = db
+
+        if query:
+            if generation_choice == "HuggingFace":
+                st.info("Generating answer using HuggingFace and LangChain...")
+                hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-small")
+                llm = HuggingFacePipeline(pipeline=hf_pipeline)
+                qa_chain = RetrievalQA.from_chain_type(
+                    llm=llm,
+                    chain_type="refine",
+                    retriever=docsearch.as_retriever(search_kwargs={"k": 4})
+                )
+                result = qa_chain(query)
+                answer = result['result']
+            else:
+                st.info("Retrieving context for Ollama generation using LangChain...")
+                docs_similar = docsearch.similarity_search(query, k=6)
+                # Extract page_content from Document objects
+                context = "\n".join([doc.page_content for doc in docs_similar])
+                st.info("Generating answer using Ollama...")
+                answer = generate_answer_ollama(query, context)
+            st.subheader("Answer")
+            st.write(answer)
+
+
+if __name__ == '__main__':
+    main() 
